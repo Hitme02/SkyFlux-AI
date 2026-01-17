@@ -1,0 +1,4 @@
+azure-functions
+azure-storage-blob>=12.19.0
+pandas>=2.0.0
+pyarrow>=14.0.0
