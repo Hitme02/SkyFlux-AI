@@ -7,7 +7,7 @@
 import { initDB, clearCache } from './services/cache.js';
 import * as api from './services/api.js';
 import { state, subscribe, setState } from './stores/appState.js';
-import { initMap, fitToBounds } from './components/MapView.js';
+import { initMap, fitToBounds, setTrajectories, renderPlanesAtTime, getTimeAtPosition, timeRange, stopTimeTravel } from './components/MapView.js';
 import { initAnomalyCards } from './components/AnomalyCards.js';
 
 // DOM Elements
@@ -139,8 +139,65 @@ function bindEvents() {
 
         if (state.isPlaying) {
             startTimeTravel();
+        } else {
+            // Stopped - clear interval
+            if (timeTravelInterval) {
+                clearInterval(timeTravelInterval);
+                timeTravelInterval = null;
+            }
         }
     });
+
+    // Time travel slider for manual scrubbing
+    elements.timeSlider.addEventListener('input', (e) => {
+        const pos = parseInt(e.target.value);
+
+        // Build set of anomaly flight IDs for red highlighting
+        const anomalyFlightIds = new Set();
+        if (state.anomalies) {
+            state.anomalies.forEach(a => anomalyFlightIds.add(a.flight_id));
+        }
+
+        renderPlanesAtTime(pos, anomalyFlightIds);
+        updateTimeTravelDisplay(pos);
+    });
+
+    // Region filter handlers
+    const regionGlobal = document.getElementById('region-global');
+    const regionCustom = document.getElementById('region-custom');
+    const regionBounds = document.getElementById('region-bounds');
+    const applyRegionFilter = document.getElementById('apply-region-filter');
+
+    if (regionGlobal && regionCustom && regionBounds) {
+        // Toggle bounds visibility based on mode
+        regionGlobal.addEventListener('change', () => {
+            regionBounds.style.display = 'none';
+            setState({ regionFilter: null });
+        });
+
+        regionCustom.addEventListener('change', () => {
+            regionBounds.style.display = 'block';
+        });
+
+        // Apply custom bounds filter
+        applyRegionFilter?.addEventListener('click', () => {
+            const minLat = parseFloat(document.getElementById('bound-min-lat').value) || -90;
+            const maxLat = parseFloat(document.getElementById('bound-max-lat').value) || 90;
+            const minLon = parseFloat(document.getElementById('bound-min-lon').value) || -180;
+            const maxLon = parseFloat(document.getElementById('bound-max-lon').value) || 180;
+
+            setState({
+                regionFilter: { minLat, maxLat, minLon, maxLon }
+            });
+
+            console.log(`[Region] Filter applied: ${minLat},${minLon} to ${maxLat},${maxLon}`);
+
+            // Re-render current view with filter (client-side only, no refetch)
+            if (state.map) {
+                state.map.invalidateSize();
+            }
+        });
+    }
 }
 
 /**
@@ -155,6 +212,20 @@ function setStatus(type, text) {
  * Load data for current view
  */
 async function loadDataForView(view) {
+    // Toggle views
+    const isModelView = view === 'models';
+    const mapContainer = document.getElementById('map-view-container');
+    const modelsContainer = document.getElementById('models-view-container');
+
+    if (mapContainer && modelsContainer) {
+        mapContainer.style.display = isModelView ? 'none' : 'block';
+        modelsContainer.style.display = isModelView ? 'block' : 'none';
+
+        if (!isModelView && state.map) {
+            setTimeout(() => state.map.invalidateSize(), 100);
+        }
+    }
+
     const params = {
         date: state.selectedDate,
         hour: state.selectedHour,
@@ -165,15 +236,54 @@ async function loadDataForView(view) {
 
     try {
         switch (view) {
+            case 'models':
+                try {
+                    const metadata = await api.getMetadata();
+                    renderModelsList(metadata.models || []);
+                } catch (e) {
+                    console.error("Failed to load models", e);
+                    renderModelsList([]);
+                }
+                break;
+
             case 'map':
-                const predictions = await api.getPredictions({ ...params, limit: 100 });
-                setState({ predictions: predictions.predictions || [] });
+                // Fetch predictions, anomalies, AND trajectories for time travel
+                const [predictionsRes, anomaliesRes, trajectoriesRes] = await Promise.all([
+                    api.getPredictions({ ...params, limit: 500 }),
+                    api.getAnomalies({ ...params, type: 'route', limit: 100 }),
+                    api.getTrajectories({ ...params, limit: 100 }),
+                ]);
+                setState({
+                    predictions: predictionsRes.predictions || [],
+                    anomalies: anomaliesRes.anomalies || []
+                });
+
+                // Set trajectories for time travel animation
+                if (trajectoriesRes.trajectories) {
+                    setTrajectories(trajectoriesRes.trajectories);
+                    // Reset time slider to start
+                    elements.timeSlider.value = 0;
+                    updateTimeTravelDisplay(0);
+                }
                 break;
 
             case 'density':
-                const density = await api.getDensity(params);
-                setState({ density: density.grid || [] });
-                if (density.grid?.length) fitToBounds(density.grid);
+                // Fetch density AND predictions AND trajectories concurrently
+                const [densityRes, densPreds, densTraj] = await Promise.all([
+                    api.getDensity(params),
+                    api.getPredictions({ ...params, limit: 500 }),
+                    api.getTrajectories({ ...params, limit: 1000 })
+                ]);
+                setState({
+                    density: densityRes.grid || [],
+                    predictions: densPreds.predictions || []
+                });
+
+                if (densTraj.trajectories) {
+                    setTrajectories(densTraj.trajectories);
+                }
+
+                if (densityRes.grid?.length) fitToBounds(densityRes.grid);
                 break;
 
             case 'anomalies':
@@ -183,10 +293,23 @@ async function loadDataForView(view) {
                 break;
 
             case 'stress':
-                const stress = await api.getStress({ ...params, min_stress: 25 });
-                setState({ stress: stress.stress_grid || [] });
-                if (stress.stress_grid?.length) fitToBounds(stress.stress_grid);
-                updateStats({ avgStress: calculateAvgStress(stress.stress_grid) });
+                // Fetch stress AND predictions AND trajectories concurrently
+                const [stressRes, stressPreds, stressTraj] = await Promise.all([
+                    api.getStress({ ...params, min_stress: 25 }),
+                    api.getPredictions({ ...params, limit: 500 }),
+                    api.getTrajectories({ ...params, limit: 1000 })
+                ]);
+                setState({
+                    stress: stressRes.stress_grid || [],
+                    predictions: stressPreds.predictions || []
+                });
+
+                if (stressTraj.trajectories) {
+                    setTrajectories(stressTraj.trajectories);
+                }
+
+                if (stressRes.stress_grid?.length) fitToBounds(stressRes.stress_grid);
+                updateStats({ avgStress: calculateAvgStress(stressRes.stress_grid) });
                 break;
         }
 
@@ -231,6 +354,12 @@ let timeTravelInterval = null;
 function startTimeTravel() {
     if (timeTravelInterval) clearInterval(timeTravelInterval);
 
+    // Build set of anomaly flight IDs for red highlighting
+    const anomalyFlightIds = new Set();
+    if (state.anomalies) {
+        state.anomalies.forEach(a => anomalyFlightIds.add(a.flight_id));
+    }
+
     timeTravelInterval = setInterval(() => {
         let pos = parseInt(elements.timeSlider.value) + 1;
 
@@ -238,21 +367,30 @@ function startTimeTravel() {
             pos = 0;
             setState({ isPlaying: false });
             elements.playBtn.textContent = '▶ Play';
+            stopTimeTravel();  // Exit time travel mode
             clearInterval(timeTravelInterval);
+            return;
         }
 
         elements.timeSlider.value = pos;
-        setState({ timeTravelPosition: pos });
 
-        // Update prediction display
+        // Render planes at the current time position (don't call setState to avoid layer clearing)
+        renderPlanesAtTime(pos, anomalyFlightIds);
+
+        // Update time display
         updateTimeTravelDisplay(pos);
-    }, 100);
+    }, 200);  // 200ms per frame for smooth animation
 }
 
 function updateTimeTravelDisplay(position) {
-    // This would interpolate between prediction and actual positions
-    const minutes = Math.round(position * 0.05 * 60);
-    elements.predTime.textContent = `+${minutes}s`;
+    // Show actual UTC time based on trajectory data range
+    const time = getTimeAtPosition(position);
+    if (time && !isNaN(time.getTime())) {
+        elements.predTime.textContent = time.toISOString().substr(11, 8);
+    } else {
+        const minutes = Math.round(position * 0.05 * 60);
+        elements.predTime.textContent = `+${minutes}s`;
+    }
 }
 
 /**
@@ -314,6 +452,46 @@ async function init() {
     await loadDataForView('map');
 
     console.log('SkyFlux AI ready!');
+}
+
+/**
+ * Render list of models
+ */
+function renderModelsList(models) {
+    const container = document.getElementById('models-list');
+    if (!container) return;
+
+    if (!models || models.length === 0) {
+        container.innerHTML = '<p style="color: #9ca3af; grid-column: 1/-1;">No models found in registry.</p>';
+        return;
+    }
+
+    container.innerHTML = models.map(m => `
+        <div class="model-card" style="
+            background: #16213e; 
+            border-left: 4px solid #3b82f6; 
+            padding: 20px; 
+            border-radius: 4px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        ">
+            <h3 style="color: #fff; margin: 0 0 10px 0;">${(m.type || 'Unknown').toUpperCase()}</h3>
+            <div style="font-family: monospace; color: #9ca3af; margin-bottom: 15px; font-size: 0.9em;">ID: ${m.model_id}</div>
+            <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid #333; padding-top: 10px;">
+                <span style="color: #60a5fa; font-size: 0.9em;">v${m.version}</span>
+                <span style="color: #6b7280; font-size: 0.8em;">${m.trained_at ? new Date(Number(m.trained_at) * 1000).toLocaleDateString() : 'N/A'}</span>
+            </div>
+            <div style="margin-top: 15px;">
+                <span style="
+                    display: inline-block; 
+                    padding: 4px 8px; 
+                    border-radius: 12px; 
+                    background: rgba(16, 185, 129, 0.2); 
+                    color: #10b981; 
+                    font-size: 0.8em;
+                ">Active</span>
+            </div>
+        </div>
+    `).join('');
 }
 
 // Start application

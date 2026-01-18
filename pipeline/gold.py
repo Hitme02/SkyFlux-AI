@@ -621,16 +621,22 @@ def generate_stress_index_gold(
         heading_variance = np.std(data["headings"]) / 180 if len(data["headings"]) > 1 else 0
         heading_conflict = min(1.0, heading_variance)
         
-        # Speed variance
-        speed_variance = np.std(data["speeds"]) / 200 if len(data["speeds"]) > 1 else 0
-        speed_variance = min(1.0, speed_variance)
+        # Maneuver variance (combined altitude + speed variance)
+        speed_variance_raw = np.std(data["speeds"]) / 200 if len(data["speeds"]) > 1 else 0
+        speed_variance = min(1.0, speed_variance_raw)
+        maneuver_variance = (alt_variance + speed_variance) / 2
+        
+        # Placeholder for anomaly component (would need anomaly data passed in)
+        # This represents the proportion of anomalous flights in this cell
+        anomaly_component = 0.0  # Requires cross-reference with anomaly detection
         
         # Composite stress index (0-100)
+        # Note: This is NOT collision probability. It's a composite metric.
         stress_index = (
-            density_score * 40 +
-            alt_variance * 20 +
-            heading_conflict * 25 +
-            speed_variance * 15
+            density_score * 40 +       # Density component (weight: 40%)
+            maneuver_variance * 35 +   # Maneuver variance (weight: 35%)
+            heading_conflict * 20 +    # Heading conflict (weight: 20%)
+            anomaly_component * 5      # Anomaly presence (weight: 5%)
         )
         
         # Risk level
@@ -656,10 +662,10 @@ def generate_stress_index_gold(
             "grid_lon": grid_lon,
             "stress_index": float(stress_index),
             "components": {
-                "density_score": float(density_score),
-                "altitude_variance": float(alt_variance),
-                "heading_conflict_score": float(heading_conflict),
-                "speed_variance": float(speed_variance),
+                "density_component": float(density_score),
+                "maneuver_variance_component": float(maneuver_variance),
+                "heading_conflict_component": float(heading_conflict),
+                "anomaly_component": float(anomaly_component),
             },
             "risk_level": risk_level,
         })
@@ -675,6 +681,73 @@ def generate_stress_index_gold(
         )
     
     return len(records)
+
+
+def generate_prediction_audit(
+    predictions_path: Path,
+    output_dir: Path,
+) -> dict:
+    """
+    Generate prediction quality audit from predictions data.
+    
+    Computes aggregate error metrics and derives confidence label.
+    
+    Returns:
+        Audit dict with metrics
+    """
+    if not predictions_path.exists():
+        logger.warning(f"Predictions file not found: {predictions_path}")
+        return {}
+    
+    df = pd.read_parquet(predictions_path)
+    
+    # Extract lateral errors from error_metrics
+    lateral_errors = []
+    for _, row in df.iterrows():
+        err = row.get("error_metrics")
+        if err and isinstance(err, dict):
+            mae = err.get("mae_lateral_nm")
+            if mae is not None and not np.isnan(mae):
+                lateral_errors.append(mae)
+    
+    if len(lateral_errors) == 0:
+        logger.warning("No valid error metrics found")
+        return {}
+    
+    lateral_errors = np.array(lateral_errors)
+    
+    # Compute aggregate metrics
+    mean_error = float(np.mean(lateral_errors))
+    p50_error = float(np.percentile(lateral_errors, 50))
+    p90_error = float(np.percentile(lateral_errors, 90))
+    
+    # Derive confidence label based on mean error
+    # Thresholds: <0.5nm = High, <2nm = Medium, else Low
+    if mean_error < 0.5:
+        confidence_label = "High"
+    elif mean_error < 2.0:
+        confidence_label = "Medium"
+    else:
+        confidence_label = "Low"
+    
+    audit = {
+        "date": date.today().isoformat(),
+        "sample_count": len(lateral_errors),
+        "mean_lateral_error_nm": round(mean_error, 3),
+        "p50_lateral_error_nm": round(p50_error, 3),
+        "p90_lateral_error_nm": round(p90_error, 3),
+        "confidence_label": confidence_label,
+        "computed_at": datetime.utcnow().isoformat() + "Z",
+    }
+    
+    # Write to metadata
+    output_dir.mkdir(parents=True, exist_ok=True)
+    with open(output_dir / "prediction_audit.json", "w") as f:
+        json.dump(audit, f, indent=2)
+    
+    logger.info(f"Prediction audit: mean={mean_error:.3f}nm, confidence={confidence_label}")
+    
+    return audit
 
 
 def generate_model_metadata(
@@ -728,8 +801,24 @@ def generate_model_metadata(
     )
     
     # Also write version.json for API
+    # Read existing version to increment model_version
+    existing_version = 0
+    existing_version_file = output_dir / "version.json"
+    if existing_version_file.exists():
+        try:
+            with open(existing_version_file, "r") as f:
+                existing = json.load(f)
+                existing_version = existing.get("model_version", 0)
+        except:
+            pass
+    
     version_data = {
-        "data_version": f"v{datetime.now().strftime('%Y%m%d')}-001",
+        "data_version": f"v{datetime.now().strftime('%Y%m%d')}--{existing_version + 1:03d}",
+        "model_version": existing_version + 1,
+        "training_window": {
+            "start": training_window_start.isoformat(),
+            "end": training_window_end.isoformat(),
+        },
         "last_trained": datetime.utcnow().isoformat() + "Z",
         "models": [r["model_id"] for r in records],
     }

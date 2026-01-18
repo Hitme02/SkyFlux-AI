@@ -1,23 +1,24 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="description" content="SkyFlux AI - Flight data analytics with predictive intelligence">
   <title>SkyFlux AI</title>
-  
+
   <!-- Leaflet CSS -->
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" 
-        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" 
-        crossorigin=""/>
-  
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+
   <!-- Google Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-  
+
   <link rel="stylesheet" href="/styles/main.css">
 </head>
+
 <body>
   <div id="app">
     <!-- Header -->
@@ -31,6 +32,7 @@
         <button class="nav-btn" data-view="density">Density</button>
         <button class="nav-btn" data-view="anomalies">Anomalies</button>
         <button class="nav-btn" data-view="stress">Stress Index</button>
+        <button class="nav-btn" data-view="models">Model Registry</button>
       </nav>
       <div class="header-status">
         <span class="status-dot"></span>
@@ -49,6 +51,32 @@
           <div class="hour-slider">
             <label>Hour: <span id="hour-value">12</span>:00</label>
             <input type="range" id="hour-slider" min="0" max="23" value="12">
+          </div>
+        </section>
+
+        <!-- Region Filter -->
+        <section class="panel" id="region-filter-panel">
+          <h3>Region Filter</h3>
+          <div class="region-options">
+            <label class="radio-label">
+              <input type="radio" name="region-mode" id="region-global" value="global" checked>
+              <span>Global</span>
+            </label>
+            <label class="radio-label">
+              <input type="radio" name="region-mode" id="region-custom" value="custom">
+              <span>Custom Bounds</span>
+            </label>
+          </div>
+          <div class="region-bounds" id="region-bounds" style="display: none; margin-top: 10px;">
+            <div class="bounds-row">
+              <label>Min Lat: <input type="number" id="bound-min-lat" value="-90" step="0.1" class="bounds-input"></label>
+              <label>Max Lat: <input type="number" id="bound-max-lat" value="90" step="0.1" class="bounds-input"></label>
+            </div>
+            <div class="bounds-row">
+              <label>Min Lon: <input type="number" id="bound-min-lon" value="-180" step="0.1" class="bounds-input"></label>
+              <label>Max Lon: <input type="number" id="bound-max-lon" value="180" step="0.1" class="bounds-input"></label>
+            </div>
+            <button class="btn btn-secondary" id="apply-region-filter" style="margin-top: 8px;">Apply Filter</button>
           </div>
         </section>
 
@@ -120,20 +148,32 @@
       </aside>
 
       <!-- Map Container -->
-      <div class="map-container">
+      <div class="map-container" id="map-view-container">
         <div id="map"></div>
-        
+
         <!-- Overlay Cards -->
         <div class="overlay-cards" id="overlay-cards">
           <!-- Anomaly cards will be inserted here -->
         </div>
-        
+
         <!-- Legend -->
         <div class="map-legend" id="map-legend">
           <h4>Legend</h4>
           <div class="legend-items">
             <!-- Dynamic legend items -->
           </div>
+        </div>
+      </div>
+
+      <!-- Model Registry View (Hidden by default) -->
+      <div class="view-container hidden" id="models-view-container"
+        style="display: none; flex: 1; padding: 20px; overflow-y: auto; background: #1a1a2e;">
+        <h2>Model Registry</h2>
+        <p style="color: #9ca3af; margin-bottom: 20px;">azure-native machine learning model artifacts</p>
+
+        <div class="models-grid" id="models-list"
+          style="display: grid; gap: 20px; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));">
+          <!-- Models injected here -->
         </div>
       </div>
     </main>
@@ -149,10 +189,10 @@
   </div>
 
   <!-- Leaflet JS -->
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" 
-          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" 
-          crossorigin=""></script>
-  
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+
   <script type="module" src="/src/main.js"></script>
 </body>
+
 </html>

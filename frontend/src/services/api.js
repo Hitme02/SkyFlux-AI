@@ -96,6 +96,10 @@ export async function getStress(params = {}) {
     return fetchWithCache('stress', params);
 }
 
+export async function getTrajectories(params = {}) {
+    return fetchWithCache('trajectories', params);
+}
+
 export async function triggerRetrain(options = {}) {
     const response = await fetch(`${API_BASE}/admin/retrain`, {
         method: 'POST',

@@ -145,13 +145,16 @@ function getDataVersion() {
 
 /**
  * Generate cache key from endpoint and params
+ * Includes model version for proper invalidation
  */
 function makeCacheKey(endpoint, params = {}) {
     const sortedParams = Object.keys(params)
         .sort()
         .map(k => `${k}=${params[k]}`)
         .join('&');
-    return sortedParams ? `${endpoint}?${sortedParams}` : endpoint;
+    // Include model version in key if available
+    const versionSuffix = currentDataVersion ? `@v${currentDataVersion}` : '';
+    return sortedParams ? `${endpoint}?${sortedParams}${versionSuffix}` : `${endpoint}${versionSuffix}`;
 }
 
 export {
