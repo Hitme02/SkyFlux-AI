@@ -124,6 +124,7 @@ function interpolatePosition(points, targetTs) {
 
 /**
  * Render planes at a specific time position (0-100)
+ * PRIORITY: Anomaly flights are rendered first and always shown
  */
 function renderPlanesAtTime(position, anomalyFlightIds = new Set()) {
     if (!trajectoryCache || trajectoryCache.length === 0) {
@@ -156,36 +157,66 @@ function renderPlanesAtTime(position, anomalyFlightIds = new Set()) {
     const range = timeRange.max - timeRange.min;
     const targetTs = timeRange.min + (position / 100) * range;
 
-    let renderedCount = 0;
-    const maxRender = 100;
+    // PRIORITIZATION: Separate anomaly flights from normal flights
+    const anomalyTrajectories = [];
+    const normalTrajectories = [];
 
     trajectoryCache.forEach(traj => {
-        if (renderedCount >= maxRender) return;
+        if (anomalyFlightIds.has(traj.flight_id)) {
+            anomalyTrajectories.push(traj);
+        } else {
+            normalTrajectories.push(traj);
+        }
+    });
 
+    // Render limits: All anomalies + some normal flights
+    const maxAnomalies = 50;  // Always show up to 50 anomalies
+    const maxNormal = 50;     // Plus up to 50 normal flights
+
+    let renderedAnomalies = 0;
+    let renderedNormal = 0;
+
+    // Helper function to render a single trajectory
+    const renderTrajectory = (traj, isAnomaly) => {
         const pos = interpolatePosition(traj.points, targetTs);
-        if (!pos || !pos.lat || !pos.lon) return;
+        if (!pos || !pos.lat || !pos.lon) return false;
 
-        const isAnomaly = anomalyFlightIds.has(traj.flight_id);
+        // Extract callsign for label
+        const callsign = traj.flight_id.includes('_')
+            ? traj.flight_id.split('_')[1]
+            : traj.flight_id.slice(0, 8);
 
         // Create plane marker at interpolated position
         const marker = L.marker([pos.lat, pos.lon], {
             icon: createPlaneIcon(pos.heading_deg || 0, isAnomaly),
-            zIndexOffset: isAnomaly ? 1000 : 0,
+            zIndexOffset: isAnomaly ? 1000 : 0,  // Anomalies always on top
+        });
+
+        // Add permanent label (prioritize anomaly visibility)
+        marker.bindTooltip(callsign, {
+            permanent: true,
+            direction: 'top',
+            offset: [0, -15],
+            className: isAnomaly ? 'plane-label anomaly-label' : 'plane-label',
         });
 
         // Format time for display
         const timeStr = new Date(targetTs * 1000).toISOString().substr(11, 8);
 
         marker.bindPopup(`
-            <strong>${traj.flight_id}</strong><br>
-            ${traj.callsign ? `Callsign: ${traj.callsign}<br>` : ''}
-            ${isAnomaly ? '<span style="color:#ef4444;">⚠️ Route Anomaly</span><br>' : ''}
-            Alt: ${pos.alt_ft?.toLocaleString() || '--'} ft<br>
-            Time: ${timeStr}
+            <div style="min-width: 180px;">
+                <strong style="font-size: 14px;">${callsign || 'Unknown'}</strong>
+                <div style="color: #9ca3af; font-size: 11px; font-family: monospace;">${traj.flight_id}</div>
+                ${isAnomaly ? `<div style="color:#ef4444; margin-top: 6px;">⚠️ <strong>Route Anomaly</strong></div>` : ''}
+                <hr style="border-color: #333; margin: 8px 0;">
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px; font-size: 12px;">
+                    <span>Altitude:</span><span>${pos.alt_ft?.toLocaleString() || '--'} ft</span>
+                    <span>Time:</span><span>${timeStr}</span>
+                </div>
+            </div>
         `);
 
         marker.addTo(layers.predictions);
-        renderedCount++;
 
         // Draw trail for this plane (last N points before current time)
         const trailPoints = traj.points
@@ -198,14 +229,32 @@ function renderPlanesAtTime(position, anomalyFlightIds = new Set()) {
         if (trailPoints.length > 1) {
             L.polyline(trailPoints, {
                 color: isAnomaly ? '#ef4444' : '#3b82f6',
-                weight: 2,
-                opacity: 0.5,
+                weight: isAnomaly ? 3 : 2,  // Thicker trails for anomalies
+                opacity: isAnomaly ? 0.8 : 0.5,
             }).addTo(layers.predictions);
         }
-    });
+
+        return true;
+    };
+
+    // FIRST: Render all anomaly flights (priority)
+    for (const traj of anomalyTrajectories) {
+        if (renderedAnomalies >= maxAnomalies) break;
+        if (renderTrajectory(traj, true)) {
+            renderedAnomalies++;
+        }
+    }
+
+    // SECOND: Render normal flights to fill remaining quota
+    for (const traj of normalTrajectories) {
+        if (renderedNormal >= maxNormal) break;
+        if (renderTrajectory(traj, false)) {
+            renderedNormal++;
+        }
+    }
 
     currentTimePosition = position;
-    console.log(`[TimeTravel] Rendered ${renderedCount} planes at position ${position}`);
+    console.log(`[TimeTravel] Rendered ${renderedAnomalies} anomalies (priority) + ${renderedNormal} normal = ${renderedAnomalies + renderedNormal} total at position ${position}`);
 }
 
 /**
@@ -389,11 +438,31 @@ function renderLivePlanes(predictions, anomalies) {
             zIndexOffset: isAnomaly ? 1000 : 0,
         });
 
-        // Bind popup with flight info
+        // Extract callsign from flight_id (format: HEX_CALLSIGN)
+        const callsign = flightId.includes('_') ? flightId.split('_')[1] : flightId;
+
+        // Add permanent tooltip with flight identifier
+        planeMarker.bindTooltip(callsign || flightId.slice(0, 8), {
+            permanent: true,
+            direction: 'top',
+            offset: [0, -15],
+            className: isAnomaly ? 'plane-label anomaly-label' : 'plane-label',
+        });
+
+        // Bind popup with detailed flight info
+        const anomalyInfo = anomalyMap.get(flightId);
         planeMarker.bindPopup(`
-            <strong>${flightId}</strong><br>
-            ${isAnomaly ? '<span style="color:#ef4444;">⚠️ Route Anomaly</span><br>' : ''}
-            Alt: ${latestPred.actual?.[0]?.alt_ft?.toLocaleString() || '--'} ft
+            <div style="min-width: 180px;">
+                <strong style="font-size: 14px;">${callsign || 'Unknown'}</strong>
+                <div style="color: #9ca3af; font-size: 11px; font-family: monospace;">${flightId}</div>
+                ${isAnomaly ? `<div style="color:#ef4444; margin-top: 6px;">⚠️ <strong>Route Anomaly</strong></div>` : ''}
+                ${anomalyInfo?.explanation ? `<div style="color:#fbbf24; font-size: 11px; margin-top: 4px;">${anomalyInfo.explanation.context || ''}</div>` : ''}
+                <hr style="border-color: #333; margin: 8px 0;">
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px; font-size: 12px;">
+                    <span>Altitude:</span><span>${latestPred.actual?.[0]?.alt_ft?.toLocaleString() || '--'} ft</span>
+                    <span>Score:</span><span>${anomalyInfo?.anomaly_score ? (anomalyInfo.anomaly_score * 100).toFixed(0) + '%' : 'N/A'}</span>
+                </div>
+            </div>
         `);
 
         planeMarker.addTo(layers.predictions);

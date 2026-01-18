@@ -227,7 +227,8 @@ async function loadDataForView(view) {
     }
 
     const params = {
-        date: state.selectedDate,
+        // FIXED: Always use sample data date (2025-12-25) since that's the only data available
+        date: '2025-12-25',
         hour: state.selectedHour,
     };
 

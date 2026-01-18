@@ -522,6 +522,23 @@ indexedDB.deleteDatabase('skyflux-cache');
 location.reload();
 ```
 
+### Azure Resource Management
+
+**Stop/Start the API to save costs:**
+
+```bash
+# STOP the Function App (saves costs when not in use)
+az functionapp stop --name skyfluxapi --resource-group skyflux-rg
+
+# START the Function App (reactivate when needed)
+az functionapp start --name skyfluxapi --resource-group skyflux-rg
+
+# Check current status
+az functionapp show --name skyfluxapi --resource-group skyflux-rg --query "state" -o tsv
+```
+
+> **Note**: When stopped, the API returns errors. The static website (frontend) remains accessible but shows "Error loading data". Storage costs (~$0.02/mo) continue even when stopped.
+
 ---
 
 ## Configuration

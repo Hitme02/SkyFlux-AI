@@ -392,6 +392,90 @@ def stress(req: func.HttpRequest) -> func.HttpResponse:
     })
 
 
+@app.function_name(name="trajectories")
+@app.route(route="trajectories", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
+def trajectories(req: func.HttpRequest) -> func.HttpResponse:
+    """Get sampled trajectories for time travel animation."""
+    blob_service = get_blob_service()
+    if not blob_service:
+        return error_response("Storage not configured", 503)
+    
+    container = blob_service.get_container_client(CONTAINER_NAME)
+    
+    # Query parameters
+    target_hour = req.params.get("hour")
+    limit = int(req.params.get("limit", 100))
+    
+    # Use pre-sampled trajectories file
+    df = read_parquet_from_blob(container, "gold/sampled_trajectories/sampled_trajectories.parquet")
+    
+    if df is None:
+        return error_response("Sampled trajectories not found", 404)
+    
+    # Build trajectory response
+    trajectories_data = []
+    
+    for idx, row in df.iterrows():
+        if len(trajectories_data) >= limit:
+            break
+            
+        flight_id = row.get("flight_id", f"traj_{idx}")
+        points_raw = row.get("points", [])
+        
+        # Convert from various possible formats
+        if points_raw is None:
+            points_raw = []
+        elif hasattr(points_raw, 'tolist'):
+            points_raw = points_raw.tolist()
+        
+        if not isinstance(points_raw, list) or len(points_raw) == 0:
+            continue
+            
+        # Filter by hour if specified
+        if target_hour is not None:
+            from datetime import datetime as dt
+            filtered_points = []
+            target_h_int = int(target_hour)
+            
+            for pt in points_raw:
+                ts = pt.get("ts", 0) if isinstance(pt, dict) else 0
+                if ts > 0:
+                    hour = dt.utcfromtimestamp(ts).hour
+                    if hour == target_h_int:
+                        filtered_points.append(pt)
+            
+            points_raw = filtered_points
+        
+        if len(points_raw) >= 2:
+            trajectories_data.append({
+                "flight_id": flight_id,
+                "points": sorted(points_raw, key=lambda p: p.get("ts", 0) if isinstance(p, dict) else 0),
+            })
+    
+    # Compute time range
+    all_ts = []
+    for t in trajectories_data:
+        for p in t.get("points", []):
+            ts = p.get("ts", 0) if isinstance(p, dict) else 0
+            if ts > 0:
+                all_ts.append(ts)
+    
+    time_range = {
+        "min": min(all_ts) if all_ts else 0,
+        "max": max(all_ts) if all_ts else 0,
+    }
+    
+    version_info = get_version_info(container)
+    
+    return cache_response({
+        "hour": target_hour,
+        "trajectories": trajectories_data,
+        "count": len(trajectories_data),
+        "time_range": time_range,
+        "data_version": version_info.get("data_version"),
+    })
+
+
 @app.function_name(name="retrain")
 @app.route(route="admin/retrain", methods=["POST"], auth_level=func.AuthLevel.ANONYMOUS)
 def retrain(req: func.HttpRequest) -> func.HttpResponse:

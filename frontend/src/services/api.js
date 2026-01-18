@@ -13,8 +13,11 @@ import {
     makeCacheKey,
 } from './cache.js';
 
-// API base URL - use relative path for proxy in dev, full URL in production
-const API_BASE = '/api';
+// API base URL - use Azure Functions in production, local proxy in dev
+const isProduction = window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1';
+const API_BASE = isProduction
+    ? 'https://skyfluxapi.azurewebsites.net/api'
+    : '/api';
 
 /**
  * Fetch with caching
@@ -34,14 +37,23 @@ async function fetchWithCache(endpoint, params = {}) {
     }
 
     // Build URL with query params
-    const url = new URL(endpoint, window.location.origin + API_BASE + '/');
+    // Handle both absolute URLs (production) and relative paths (development)
+    let url;
+    if (API_BASE.startsWith('http')) {
+        // Absolute URL (production with Azure Functions)
+        url = new URL(endpoint, API_BASE + '/');
+    } else {
+        // Relative URL (local development with proxy)
+        url = new URL(endpoint, window.location.origin + API_BASE + '/');
+    }
+
     Object.entries(params).forEach(([key, value]) => {
         if (value !== undefined && value !== null) {
             url.searchParams.set(key, value);
         }
     });
 
-    console.log(`[API] Fetching: ${url.pathname}${url.search}`);
+    console.log(`[API] Fetching: ${url.href}`);
 
     // Fetch from API
     const response = await fetch(url);

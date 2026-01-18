@@ -8,8 +8,8 @@ const state = {
     // Current view
     currentView: 'map',
 
-    // Date/time selection
-    selectedDate: new Date().toISOString().split('T')[0],
+    // Date/time selection - default to data date (2025-12-25)
+    selectedDate: '2025-12-25',
     selectedHour: 12,
 
     // Data
