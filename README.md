@@ -5,6 +5,9 @@
 SkyFlux AI is a comprehensive aviation analytics system that processes ADS-B (Automatic Dependent Surveillance-Broadcast) flight data through a medallion architecture pipeline, generating predictions, detecting anomalies, and computing airspace stress metrics.
 
 ---
+## Demo Video (Screen Recording)
+<video src="https://github.com/user-attachments/assets/6e8d45f4-b40f-4615-b9f8-cff137e181cb"></video>
+---
 
 ## Table of Contents
 
